@@ -1,0 +1,500 @@
+# Meshtastic Scheduled Announcer
+
+A lightweight Python-based Meshtastic automation script designed to run from Linux cron jobs and periodically announce node and mesh statistics to a Meshtastic channel.
+
+This project was inspired by MeshMonitor automation concepts but is intentionally designed as a standalone script using the native Meshtastic Python API and TCP connectivity.
+
+---
+
+## Features
+
+- TCP connection to a Meshtastic node
+- Configurable message templates
+- Dynamic token replacement
+- Scheduled execution via cron
+- Optional state-change detection
+- Rotating log files
+- Dry-run testing mode
+- User-defined custom tokens
+- Mesh statistics reporting
+- Python 3.10+ compatible
+- Future-ready token architecture
+
+---
+
+## Example Announcement
+
+```text
+📡 Nebuchadnezzar
+
+Node: Tampa-North
+Role: North Mesh Gateway
+
+Nodes Seen: 58
+Direct Nodes: 12
+
+1 Hop: 19
+2 Hop: 21
+3+ Hop: 6
+
+Battery: 100%
+Voltage: 4.18v
+
+Channel Util: 8.2%
+AirTX: 0.4%
+
+Best Neighbor: MORPHUS
+Best SNR: 9.3
+
+Firmware: 2.7.3
+Hardware: MESHNOLOGY_W12
+
+Position: 27.984420, -82.346280
+
+Updated: 2026-11-01 09:30:00
+```
+
+---
+
+# Requirements
+
+## System
+
+- Linux
+- Python 3.10+
+- Meshtastic device reachable via TCP
+
+## Python Packages
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+### requirements.txt
+
+```text
+meshtastic
+pyyaml
+```
+
+---
+
+# Installation
+
+Create a project directory:
+
+```bash
+mkdir -p /opt/meshtastic-announcer
+cd /opt/meshtastic-announcer
+```
+
+Copy:
+
+```text
+announce.py
+config.yaml
+requirements.txt
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+# Configuration
+
+## config.yaml
+
+```yaml
+meshtastic:
+  host: 192.168.1.10
+  channel_index: 0
+
+announce:
+  enabled: true
+  send_only_on_change: false
+
+  template: |
+    {LONG_NAME} / {NODE_ROLE}
+    Nodes {NODE_COUNT} ({DIRECT_COUNT} direct; {ONE_HOP_COUNT}/{TWO_HOP_COUNT}/{THREE_PLUS_HOP_COUNT} hops)
+    Util {CHANNEL_UTIL}% TX {AIRTX}%
+    Best {TOP_NEIGHBOR} {BEST_SNR}dB
+    {FIRMWARE} / {HW_MODEL}
+    {POSITION}
+    {TIME}
+
+custom:
+  SITE_NAME: "Nebuchadnezzar"
+  NODE_ROLE: "North Mesh Gateway"
+
+logging:
+  file: /var/log/meshtastic-announcer.log
+
+state_file: /opt/meshtastic-announcer/state.json
+
+weather:
+  enabled: false
+```
+
+Meshtastic text payloads are limited to 233 UTF-8 bytes. The dry run reports the
+rendered payload size; the script rejects oversized messages before transmitting.
+
+## Multiple Nodes and Channels
+
+To announce from multiple nodes, configure `targets` under `meshtastic`. Each
+target connects to its own node, reads that node's metrics, renders its own
+announcement, and sends it to each listed channel index:
+
+```yaml
+meshtastic:
+  targets:
+    - host: 192.168.1.10
+      channel_indices: [0, 2]
+    - host: 192.168.1.11
+      channel_indices: [1]
+```
+
+Each host must appear only once and each target must have at least one channel
+index. The state-change check is tracked independently for each node and
+channel. `--dry-run` displays the generated message for every target without
+sending or updating state.
+
+When `targets` is omitted, the existing `meshtastic.host` and
+`meshtastic.channel_index` settings continue to configure a single node and
+channel.
+
+---
+
+# Running
+
+## Normal Execution
+
+```bash
+python3 announce.py
+```
+
+---
+
+## Dry Run
+
+Generate the message without transmitting.
+
+```bash
+python3 announce.py --dry-run
+```
+
+Example:
+
+```text
+--- Generated Message ---
+
+📡 Nebuchadnezzar
+
+Node: Tampa-North
+Role: North Mesh Gateway
+
+Nodes Seen: 58
+Direct Nodes: 12
+
+Updated: 2026-11-01 09:30:00
+```
+
+---
+
+## Force Transmission
+
+Send regardless of change detection.
+
+```bash
+python3 announce.py --force
+```
+
+## TCP Send Delay
+
+After calling the Meshtastic Python API to send an announcement, the script
+keeps that node's TCP connection open for 2 seconds after each channel send.
+This gives the node time to process each outgoing message before disconnecting.
+With multiple targets or channels, allow roughly 2 seconds per channel send,
+plus connection and metrics time, when setting an external command timeout.
+Dry runs also keep each node connection open for 2 seconds before closing it,
+so the Meshtastic library's background connection activity can finish cleanly.
+
+The `Announcement sent` log entry means the local send call returned; it does
+not confirm that the message was transmitted over the air or received by other
+nodes.
+
+---
+
+# Cron Configuration
+
+## Every Hour
+
+```cron
+0 * * * * cd /opt/meshtastic-announcer && /usr/bin/python3 announce.py
+```
+
+## Every 30 Minutes
+
+```cron
+*/30 * * * * cd /opt/meshtastic-announcer && /usr/bin/python3 announce.py
+```
+
+## Daily Status Beacon
+
+```cron
+0 7 * * * cd /opt/meshtastic-announcer && /usr/bin/python3 announce.py
+```
+
+---
+
+# State Change Detection
+
+When enabled:
+
+```yaml
+send_only_on_change: true
+```
+
+The script compares the current mesh state against the previous execution.
+
+Current tracked values:
+
+- NODE_COUNT
+- DIRECT_COUNT
+- BATTERY
+- TOP_NEIGHBOR
+- BEST_SNR
+
+If no change is detected, no transmission occurs.
+
+This helps minimize unnecessary airtime usage.
+
+---
+
+# Custom Tokens
+
+Custom tokens may be defined in:
+
+```yaml
+custom:
+  SITE_NAME: "Nebuchadnezzar"
+  NODE_ROLE: "North Gateway"
+  CONTACT: "@francis"
+```
+
+Template usage:
+
+```text
+Location: {SITE_NAME}
+Role: {NODE_ROLE}
+Contact: {CONTACT}
+```
+
+No code modifications are required.
+
+---
+
+# Available Tokens
+
+## Node Information
+
+| Token | Description |
+|---------|-------------|
+| `{LONG_NAME}` | Node long name |
+| `{SHORT_NAME}` | Node short name |
+| `{LOCAL_NODE_ID}` | Node ID |
+| `{LOCAL_NODE_NUM}` | Node numeric ID |
+| `{HW_MODEL}` | Hardware model |
+| `{FIRMWARE}` | Firmware version |
+
+---
+
+## Mesh Statistics
+
+| Token | Description |
+|---------|-------------|
+| `{NODE_COUNT}` | Total nodes |
+| `{DIRECT_COUNT}` | Direct nodes |
+| `{ONE_HOP_COUNT}` | One-hop nodes |
+| `{TWO_HOP_COUNT}` | Two-hop nodes |
+| `{THREE_PLUS_HOP_COUNT}` | Three-plus-hop nodes |
+
+---
+
+## RF Metrics
+
+| Token | Description |
+|---------|-------------|
+| `{CHANNEL_UTIL}` | Channel utilization |
+| `{AIRTX}` | Air utilization TX |
+| `{AVERAGE_SNR}` | Mesh average SNR |
+| `{AVERAGE_RSSI}` | Mesh average RSSI |
+| `{BEST_SNR}` | Best direct-node SNR |
+| `{TOP_NEIGHBOR}` | Strongest direct node |
+
+---
+
+## Device Metrics
+
+| Token | Description |
+|---------|-------------|
+| `{BATTERY}` | Battery percentage |
+| `{VOLTAGE}` | Voltage |
+| `{UPTIME}` | Reserved for future implementation |
+
+---
+
+## GPS
+
+| Token | Description |
+|---------|-------------|
+| `{POSITION}` | Latitude / Longitude |
+| `{LATITUDE}` | Latitude |
+| `{LONGITUDE}` | Longitude |
+| `{ALTITUDE}` | Altitude |
+| `{GPS_LOCK}` | GPS lock status |
+
+---
+
+## Channel Information
+
+| Token | Description |
+|---------|-------------|
+| `{PRIMARY_CHANNEL}` | Channel index |
+| `{CHANNEL_NAME}` | Channel display name |
+
+---
+
+## Activity Information
+
+| Token | Description |
+|---------|-------------|
+| `{LAST_HEARD_NODE}` | Most recently heard node |
+| `{LAST_HEARD_TIME}` | Last heard timestamp |
+| `{TIME}` | Current script time |
+
+---
+
+## Warning Tokens
+
+| Token | Description |
+|---------|-------------|
+| `{AIRTIME_WARNING}` | OK / HIGH |
+| `{UTILIZATION_WARNING}` | OK / HIGH |
+
+---
+
+## Reserved Future Tokens
+
+These currently return placeholder values and are intended for future expansion.
+
+| Token | Status |
+|---------|---------|
+| `{REGION}` | Reserved |
+| `{MQTT_STATUS}` | Reserved |
+| `{WEATHER}` | Disabled |
+| `{UPTIME}` | Reserved |
+
+---
+
+# Logging
+
+Log file location:
+
+```text
+/var/log/meshtastic-announcer.log
+```
+
+Features:
+
+- Rotating logs
+- 5 MB maximum file size
+- Five backups retained
+
+Example:
+
+```text
+2026-11-01 09:00:00 INFO Connecting to node
+2026-11-01 09:00:01 INFO Announcement sent
+```
+
+---
+
+# Project Structure
+
+```text
+meshtastic-announcer/
+├── announce.py
+├── config.yaml (local, ignored)
+├── requirements.txt
+├── state.json (local, ignored)
+├── logs/ (local, ignored)
+├── .gitignore
+├── CONTRIBUTING.md
+├── SECURITY.md
+├── DEPLOYMENT.md
+├── OPERATIONS.md
+└── Readme.me
+```
+
+## Additional Guides
+
+- [Git workflow and development](./CONTRIBUTING.md)
+- [Security guidance](./SECURITY.md)
+- [Deployment](./DEPLOYMENT.md)
+- [Operations and troubleshooting](./OPERATIONS.md)
+
+---
+
+# Future Roadmap
+
+Planned enhancements:
+
+- Real node uptime reporting
+- LoRa region detection
+- MQTT status monitoring
+- Modem preset reporting
+- Firmware update notifications
+- Neighbor health statistics
+- Gateway status indicators
+- Automatic weather integration (currently disabled)
+- Multiple template support
+- Direct-message announcement mode
+- Multi-node monitoring
+
+---
+
+# Disclaimer
+
+Use responsibly on shared Meshtastic networks.
+
+Frequent automated announcements can consume airtime and increase channel congestion. Consider enabling `send_only_on_change` and scheduling announcements at reasonable intervals.
+
+Recommended minimum schedule:
+
+```cron
+0 * * * *
+```
+
+or
+
+```cron
+*/30 * * * *
+```
+
+Avoid excessive transmission intervals unless operating on a private mesh.
+
+---
+
+## License
+
+MIT License
+
+Copyright (c) 2026
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files to deal in the Software without restriction.

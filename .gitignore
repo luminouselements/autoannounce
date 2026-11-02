@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+logs/
+config.yaml
+state.json
+*.bak
+*.bak.*
+.env
+.env.*
+!.env.example
