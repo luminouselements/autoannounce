@@ -28,6 +28,8 @@ import meshtastic.tcp_interface
 
 
 CONFIG_FILE = "config.yaml"
+STALE_NODE_AFTER_SECONDS = 24 * 60 * 60
+LOW_BATTERY_THRESHOLD = 20
 
 
 def parse_args():
@@ -57,12 +59,22 @@ def get_targets(config):
     meshtastic_config = config["meshtastic"]
 
     if "targets" not in meshtastic_config:
+        request_environment = meshtastic_config.get(
+            "request_environment_metrics",
+            False
+        )
+        if not isinstance(request_environment, bool):
+            raise ValueError(
+                "meshtastic.request_environment_metrics must be a boolean."
+            )
+
         return [
             {
                 "host": meshtastic_config["host"],
                 "channel_indices": [
                     meshtastic_config.get("channel_index", 0)
-                ]
+                ],
+                "request_environment_metrics": request_environment
             }
         ], False
 
@@ -118,10 +130,21 @@ def get_targets(config):
                 f"Duplicate channel index configured for target {host}."
             )
 
+        request_environment = target.get(
+            "request_environment_metrics",
+            False
+        )
+        if not isinstance(request_environment, bool):
+            raise ValueError(
+                f"meshtastic.targets[{index}]."
+                "request_environment_metrics must be a boolean."
+            )
+
         targets.append(
             {
                 "host": host,
-                "channel_indices": channel_indices
+                "channel_indices": channel_indices,
+                "request_environment_metrics": request_environment
             }
         )
 
@@ -256,30 +279,192 @@ def get_latest_node(nodes):
 
         last_heard = node.get("lastHeard", 0)
 
-        if last_heard > latest_time:
+        if (
+            isinstance(last_heard, (int, float))
+            and not isinstance(last_heard, bool)
+            and last_heard > latest_time
+        ):
 
             latest_time = last_heard
 
             latest_name = (
-                node.get("user", {})
+                (node.get("user") or {})
                 .get("shortName", "Unknown")
             )
 
-    return latest_name
+    return latest_name, latest_time
+
+
+def get_mesh_activity(nodes, current_time):
+
+    one_hour_cutoff = current_time - 3600
+    one_day_cutoff = current_time - STALE_NODE_AFTER_SECONDS
+    nodes_seen_1h = 0
+    nodes_seen_24h = 0
+    stale_node_count = 0
+
+    for node in nodes.values():
+        last_heard = node.get("lastHeard")
+        if (
+            isinstance(last_heard, bool)
+            or not isinstance(last_heard, (int, float))
+            or last_heard <= 0
+        ):
+            continue
+
+        if last_heard > one_hour_cutoff:
+            nodes_seen_1h += 1
+        if last_heard > one_day_cutoff:
+            nodes_seen_24h += 1
+        else:
+            stale_node_count += 1
+
+    return nodes_seen_1h, nodes_seen_24h, stale_node_count
+
+
+def format_age(age_seconds):
+
+    age_seconds = max(0, int(age_seconds))
+
+    if age_seconds < 60:
+        return f"{age_seconds}s"
+
+    days, remainder = divmod(age_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
+
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def get_numeric_metric(metrics, *keys):
+
+    for key in keys:
+        value = metrics.get(key)
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            return round(value, 1)
+
+    return "N/A"
+
+
+def get_units(config):
+
+    units = config.get("units", "metric")
+    if not isinstance(units, str) or units.lower() not in {
+        "metric",
+        "imperial"
+    }:
+        raise ValueError("units must be either 'metric' or 'imperial'.")
+
+    return units.lower()
+
+
+def convert_metric(value, factor, offset=0, precision=1):
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "N/A"
+
+    return round(value * factor + offset, precision)
+
+
+def request_environment_metrics_if_missing(interface, channel_index):
+
+    try:
+        my_node = interface.getMyNodeInfo() or {}
+    except Exception:
+        logging.exception(
+            "Unable to inspect node before requesting environment telemetry."
+        )
+        return
+
+    environment_metrics = (
+        my_node.get("environmentMetrics")
+        or my_node.get("environment_metrics")
+        or {}
+    )
+    if (
+        get_numeric_metric(environment_metrics, "temperature") != "N/A"
+        and get_numeric_metric(
+            environment_metrics,
+            "barometricPressure",
+            "barometric_pressure"
+        ) != "N/A"
+    ):
+        return
+
+    node_num = my_node.get("num")
+    if not isinstance(node_num, int) or isinstance(node_num, bool):
+        logging.warning(
+            "Cannot request environment telemetry: local node number is unavailable."
+        )
+        return
+
+    try:
+        logging.info(
+            "Requesting environment telemetry from local node %s.",
+            node_num
+        )
+        interface.sendTelemetry(
+            destinationId=node_num,
+            wantResponse=True,
+            channelIndex=channel_index,
+            telemetryType="environment_metrics"
+        )
+    except Exception:
+        logging.exception(
+            "Environment telemetry request failed; using cached values."
+        )
+
+
+def format_uptime(uptime_seconds):
+
+    if uptime_seconds is None:
+        return "N/A"
+
+    if isinstance(uptime_seconds, bool) or not isinstance(
+        uptime_seconds,
+        int
+    ):
+        raise TypeError("Device uptime must be an integer number of seconds.")
+
+    if uptime_seconds < 0:
+        raise ValueError("Device uptime must not be negative.")
+
+    days, remainder = divmod(uptime_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
+
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 def get_metrics(interface, config):
 
     nodes = interface.nodes
+    units = get_units(config)
 
     try:
         my_node = interface.getMyNodeInfo()
     except Exception:
         my_node = {}
 
-    user = my_node.get("user", {})
-    metrics = my_node.get("deviceMetrics", {})
-    position = my_node.get("position", {})
+    user = my_node.get("user") or {}
+    metrics = my_node.get("deviceMetrics") or {}
+    position = my_node.get("position") or {}
+    environment_metrics = (
+        my_node.get("environmentMetrics")
+        or my_node.get("environment_metrics")
+        or {}
+    )
 
     node_count = len(nodes)
 
@@ -304,7 +489,7 @@ def get_metrics(interface, config):
         lat = position.get("latitudeI")
         lon = position.get("longitudeI")
 
-    if lat and lon:
+    if lat is not None and lon is not None:
         latitude = round(lat / 1e7, 6)
         longitude = round(lon / 1e7, 6)
 
@@ -321,6 +506,47 @@ def get_metrics(interface, config):
         or my_node.get("firmwareVersion")
         or "Unknown"
     )
+
+    temperature = get_numeric_metric(
+        environment_metrics,
+        "temperature"
+    )
+    barometric_pressure = get_numeric_metric(
+        environment_metrics,
+        "barometricPressure",
+        "barometric_pressure"
+    )
+    ground_speed = get_numeric_metric(
+        position,
+        "groundSpeed",
+        "ground_speed"
+    )
+    altitude = get_numeric_metric(position, "altitude")
+    if units == "imperial":
+        if temperature != "N/A":
+            temperature = convert_metric(temperature, 9 / 5, 32)
+        if ground_speed != "N/A":
+            ground_speed = convert_metric(ground_speed, 0.621371)
+        if altitude != "N/A":
+            altitude = convert_metric(altitude, 3.28084)
+
+    current_time = time.time()
+    latest_node, latest_heard = get_latest_node(nodes)
+    nodes_seen_1h, nodes_seen_24h, stale_node_count = (
+        get_mesh_activity(nodes, current_time)
+    )
+    low_battery_count = 0
+    for node in nodes.values():
+        node_metrics = node.get("deviceMetrics") or {}
+        battery_level = node_metrics.get("batteryLevel")
+        if (
+            isinstance(battery_level, (int, float))
+            and not isinstance(battery_level, bool)
+            and 0 <= battery_level <= LOW_BATTERY_THRESHOLD
+        ):
+            low_battery_count += 1
+
+    configured_channel = config["meshtastic"].get("channel_index", 0)
 
     tokens = {
         "LONG_NAME":
@@ -344,6 +570,18 @@ def get_metrics(interface, config):
         "THREE_PLUS_HOP_COUNT":
             three_plus,
 
+        "NODES_SEEN_1H":
+            nodes_seen_1h,
+
+        "NODES_SEEN_24H":
+            nodes_seen_24h,
+
+        "STALE_NODE_COUNT":
+            stale_node_count,
+
+        "LOW_BATTERY_COUNT":
+            low_battery_count,
+
         "BATTERY":
             metrics.get(
                 "batteryLevel",
@@ -354,6 +592,11 @@ def get_metrics(interface, config):
             metrics.get(
                 "voltage",
                 "N/A"
+            ),
+
+        "UPTIME":
+            format_uptime(
+                metrics.get("uptimeSeconds")
             ),
 
         "CHANNEL_UTIL":
@@ -426,24 +669,52 @@ def get_metrics(interface, config):
             my_node.get("num", "N/A"),
 
         "LAST_HEARD_NODE":
-            get_latest_node(nodes),
+            latest_node,
 
         "LAST_HEARD_TIME":
-            datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
+            (
+                datetime.fromtimestamp(latest_heard).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                if latest_heard
+                else "N/A"
+            ),
+
+        "LAST_HEARD_AGE":
+            (
+                format_age(current_time - latest_heard)
+                if latest_heard
+                else "N/A"
             ),
 
         "GPS_LOCK":
             (
                 "YES"
-                if position else "NO"
+                if lat is not None and lon is not None
+                else "NO"
             ),
 
+        "GPS_SATELLITES":
+            position.get("satsInView", "N/A"),
+
+        "GROUND_SPEED":
+            ground_speed,
+
         "ALTITUDE":
-            position.get(
-                "altitude",
-                "N/A"
+            altitude,
+
+        "TEMPERATURE":
+            temperature,
+
+        "RELATIVE_HUMIDITY":
+            get_numeric_metric(
+                environment_metrics,
+                "relativeHumidity",
+                "relative_humidity"
             ),
+
+        "BAROMETRIC_PRESSURE":
+            barometric_pressure,
 
         "MQTT_STATUS":
             "N/A",
@@ -451,19 +722,14 @@ def get_metrics(interface, config):
         "REGION":
             "N/A",
 
-        "UPTIME":
-            "N/A",
-
         "PRIMARY_CHANNEL":
-            config["meshtastic"]
-            .get(
-                "channel_index",
-                0
-            ),
+            configured_channel,
 
         "CHANNEL_NAME":
-            f"Channel "
-            f"{config['meshtastic'].get('channel_index',0)}",
+            f"Channel {configured_channel}",
+
+        "CHANNEL_INDEX":
+            configured_channel,
 
         "WEATHER":
             "Disabled",
@@ -512,6 +778,15 @@ def render_template(template, tokens):
     return result
 
 
+def channel_tokens(tokens, channel_index):
+
+    result = dict(tokens)
+    result["CHANNEL_INDEX"] = channel_index
+    result["PRIMARY_CHANNEL"] = channel_index
+    result["CHANNEL_NAME"] = f"Channel {channel_index}"
+    return result
+
+
 def validate_message_size(message):
     payload_size = len(message.encode("utf-8"))
     payload_limit = (
@@ -544,7 +819,40 @@ def state_snapshot(tokens):
             tokens["TOP_NEIGHBOR"],
 
         "BEST_SNR":
-            tokens["BEST_SNR"]
+            tokens["BEST_SNR"],
+
+        "NODES_SEEN_1H":
+            tokens["NODES_SEEN_1H"],
+
+        "NODES_SEEN_24H":
+            tokens["NODES_SEEN_24H"],
+
+        "STALE_NODE_COUNT":
+            tokens["STALE_NODE_COUNT"],
+
+        "LOW_BATTERY_COUNT":
+            tokens["LOW_BATTERY_COUNT"],
+
+        "LAST_HEARD_NODE":
+            tokens["LAST_HEARD_NODE"],
+
+        "LAST_HEARD_TIME":
+            tokens["LAST_HEARD_TIME"],
+
+        "GPS_SATELLITES":
+            tokens["GPS_SATELLITES"],
+
+        "GROUND_SPEED":
+            tokens["GROUND_SPEED"],
+
+        "TEMPERATURE":
+            tokens["TEMPERATURE"],
+
+        "RELATIVE_HUMIDITY":
+            tokens["RELATIVE_HUMIDITY"],
+
+        "BAROMETRIC_PRESSURE":
+            tokens["BAROMETRIC_PRESSURE"]
     }
 
 
@@ -629,13 +937,17 @@ def main():
                 .TCPInterface(host)
             )
 
+            if (
+                target["request_environment_metrics"]
+                and not args.dry_run
+            ):
+                request_environment_metrics_if_missing(
+                    interface,
+                    channel_indices[0]
+                )
+
             tokens = get_metrics(interface, config)
             current_state = state_snapshot(tokens)
-            message = render_template(
-                config["announce"]["template"],
-                tokens
-            )
-
             if multiple_targets:
                 host_states = target_states.get(host, {})
                 if not isinstance(host_states, dict):
@@ -649,18 +961,32 @@ def main():
                     or current_state != previous_state
                     or args.force
                 ):
-                    print_dry_run(host, channel_indices, message)
+                    for channel_index in channel_indices:
+                        message = render_template(
+                            config["announce"]["template"],
+                            channel_tokens(tokens, channel_index)
+                        )
+                        print_dry_run(
+                            host,
+                            [channel_index],
+                            message
+                        )
                 else:
                     logging.info(
                         "No change detected for %s.",
                         host
                     )
-                time.sleep(2)
+                time.sleep(3)
                 continue
 
             sent_any = False
 
             for channel_index in channel_indices:
+                message = render_template(
+                    config["announce"]["template"],
+                    channel_tokens(tokens, channel_index)
+                )
+
                 if multiple_targets:
                     channel_state = host_states.get(
                         str(channel_index),
@@ -688,7 +1014,7 @@ def main():
                     message,
                     channelIndex=channel_index
                 )
-                time.sleep(2)
+                time.sleep(3)
                 sent_any = True
 
                 if multiple_targets:

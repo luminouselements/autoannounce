@@ -1,16 +1,21 @@
+units: metric  # Choose "metric" or "imperial"; defaults to metric.
+
 meshtastic:
   targets:
     - host: 192.168.1.10
       channel_indices: [0, 1]
+      # Requests telemetry only if environment values are not already cached.
+      # Enable only for nodes that report environmental metrics.
+      request_environment_metrics: false
     - host: 192.168.1.11
       channel_indices: [0, 1]
     - host: 192.168.1.12
       channel_indices: [0, 1]
 
 announce:
-  enabled: true // Set to false to disable announcements
-  send_only_on_change: false // Set to true to only send announcements when the status changes
-#interval: 300 // Interval in seconds between announcements
+  enabled: true # Set to false to disable announcements
+  send_only_on_change: false # Set to true to only send announcements when the status changes
+# interval: 300 # Interval in seconds between announcements
 
   template: |
     🟢 Status: {SHORT_NAME} {LONG_NAME}
@@ -20,6 +25,7 @@ announce:
     📶 {CHANNEL_UTIL}% 📤 {AIRTX}%
     🏆 Best {TOP_NEIGHBOR} {BEST_SNR}dB
     🖥️ {HW_MODEL} 💾 {FIRMWARE}
+    ⏱️ {UPTIME}
 #{SITE_NAME}{NODE_ROLE}{CONTACT}  //custom fields can be added to the template using the custom section below. Use {CUSTOM_FIELD_NAME} to reference them in the template.  
 
 custom:

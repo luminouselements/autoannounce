@@ -139,10 +139,17 @@ state_file: /opt/meshtastic-announcer/state.json
 
 weather:
   enabled: false
+
+units: imperial
 ```
 
 Meshtastic text payloads are limited to 233 UTF-8 bytes. The dry run reports the
 rendered payload size; the script rejects oversized messages before transmitting.
+
+Set `units` to `metric` (the default) or `imperial`. This controls
+`{TEMPERATURE}` (°C / °F), `{GROUND_SPEED}` (km/h / mph), and `{ALTITUDE}`
+(m / ft). `{BAROMETRIC_PRESSURE}` always remains in hPa. Add the matching unit
+labels to the template, for example `{TEMPERATURE}°F` when using imperial.
 
 ## Multiple Nodes and Channels
 
@@ -155,6 +162,7 @@ meshtastic:
   targets:
     - host: 192.168.1.10
       channel_indices: [0, 2]
+      request_environment_metrics: true
     - host: 192.168.1.11
       channel_indices: [1]
 ```
@@ -163,6 +171,13 @@ Each host must appear only once and each target must have at least one channel
 index. The state-change check is tracked independently for each node and
 channel. `--dry-run` displays the generated message for every target without
 sending or updating state.
+
+Set `request_environment_metrics: true` for a target with an environmental
+sensor to request fresh telemetry when temperature or barometric pressure is
+not already cached. This sends a Meshtastic telemetry request and waits for a
+response; if the request fails, cached values are used and missing tags remain
+`N/A`. Dry runs never send telemetry requests. For single-node configuration,
+set `meshtastic.request_environment_metrics: true`.
 
 When `targets` is omitted, the existing `meshtastic.host` and
 `meshtastic.channel_index` settings continue to configure a single node and
@@ -323,6 +338,10 @@ No code modifications are required.
 | `{ONE_HOP_COUNT}` | One-hop nodes |
 | `{TWO_HOP_COUNT}` | Two-hop nodes |
 | `{THREE_PLUS_HOP_COUNT}` | Three-plus-hop nodes |
+| `{NODES_SEEN_1H}` | Nodes heard within the last hour |
+| `{NODES_SEEN_24H}` | Nodes heard within the last 24 hours |
+| `{STALE_NODE_COUNT}` | Nodes with a valid last-heard time at least 24 hours ago |
+| `{LOW_BATTERY_COUNT}` | Nodes reporting battery at or below 20% |
 
 ---
 
@@ -345,7 +364,7 @@ No code modifications are required.
 |---------|-------------|
 | `{BATTERY}` | Battery percentage |
 | `{VOLTAGE}` | Voltage |
-| `{UPTIME}` | Reserved for future implementation |
+| `{UPTIME}` | Device uptime, formatted as days, hours, and minutes; `N/A` if unavailable |
 
 ---
 
@@ -356,8 +375,19 @@ No code modifications are required.
 | `{POSITION}` | Latitude / Longitude |
 | `{LATITUDE}` | Latitude |
 | `{LONGITUDE}` | Longitude |
-| `{ALTITUDE}` | Altitude |
+| `{ALTITUDE}` | Altitude in meters (`metric`) or feet (`imperial`) |
 | `{GPS_LOCK}` | GPS lock status |
+| `{GPS_SATELLITES}` | Satellites in view, when reported |
+| `{GROUND_SPEED}` | Ground speed in km/h (`metric`) or mph (`imperial`), when reported |
+
+Environmental tokens are populated when the local node's data includes
+environment metrics; otherwise they render as `N/A`.
+
+| Token | Description |
+|---------|-------------|
+| `{TEMPERATURE}` | Temperature in °C (`metric`) or °F (`imperial`), when reported |
+| `{RELATIVE_HUMIDITY}` | Relative humidity percentage, when reported |
+| `{BAROMETRIC_PRESSURE}` | Pressure in hPa, regardless of selected unit system |
 
 ---
 
@@ -365,8 +395,9 @@ No code modifications are required.
 
 | Token | Description |
 |---------|-------------|
-| `{PRIMARY_CHANNEL}` | Channel index |
+| `{PRIMARY_CHANNEL}` | Channel index currently being sent to |
 | `{CHANNEL_NAME}` | Channel display name |
+| `{CHANNEL_INDEX}` | Channel index currently being sent to |
 
 ---
 
@@ -375,7 +406,8 @@ No code modifications are required.
 | Token | Description |
 |---------|-------------|
 | `{LAST_HEARD_NODE}` | Most recently heard node |
-| `{LAST_HEARD_TIME}` | Last heard timestamp |
+| `{LAST_HEARD_TIME}` | Most recent node's last-heard timestamp |
+| `{LAST_HEARD_AGE}` | Time elapsed since the most recent node was heard; this value alone does not trigger `send_only_on_change` |
 | `{TIME}` | Current script time |
 
 ---
@@ -398,7 +430,6 @@ These currently return placeholder values and are intended for future expansion.
 | `{REGION}` | Reserved |
 | `{MQTT_STATUS}` | Reserved |
 | `{WEATHER}` | Disabled |
-| `{UPTIME}` | Reserved |
 
 ---
 
