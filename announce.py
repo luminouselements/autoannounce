@@ -466,7 +466,8 @@ def get_metrics(interface, config):
         or {}
     )
 
-    node_count = len(nodes)
+    node_database = getattr(interface, "nodesByNum", None)
+    node_count = len(node_database) if node_database is not None else len(nodes)
 
     direct_count = sum(
         1
@@ -889,6 +890,13 @@ def main():
         config = load_config()
 
         setup_logging(config)
+
+        announcements_enabled = config["announce"].get("enabled", True)
+        if not isinstance(announcements_enabled, bool):
+            raise ValueError("announce.enabled must be a boolean.")
+        if not announcements_enabled:
+            logging.info("Announcements are disabled by configuration.")
+            return 0
 
         targets, multiple_targets = get_targets(config)
         previous_state = load_state(config["state_file"])

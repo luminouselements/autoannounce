@@ -174,10 +174,10 @@ sending or updating state.
 
 Set `request_environment_metrics: true` for a target with an environmental
 sensor to request fresh telemetry when temperature or barometric pressure is
-not already cached. This sends a Meshtastic telemetry request and waits for a
-response; if the request fails, cached values are used and missing tags remain
-`N/A`. Dry runs never send telemetry requests. For single-node configuration,
-set `meshtastic.request_environment_metrics: true`.
+not already cached. The script uses the values available when it reads node
+metrics; if telemetry is unavailable, missing tags remain `N/A`. Dry runs
+never send telemetry requests. For single-node configuration, set
+`meshtastic.request_environment_metrics: true`.
 
 When `targets` is omitted, the existing `meshtastic.host` and
 `meshtastic.channel_index` settings continue to configure a single node and
@@ -192,6 +192,10 @@ channel.
 ```bash
 python3 announce.py
 ```
+
+Set `announce.enabled: false` in `config.yaml` to skip announcements. The
+script logs that announcements are disabled and exits without connecting to
+any node. If omitted, `announce.enabled` defaults to `true`.
 
 ---
 
@@ -232,11 +236,11 @@ python3 announce.py --force
 ## TCP Send Delay
 
 After calling the Meshtastic Python API to send an announcement, the script
-keeps that node's TCP connection open for 2 seconds after each channel send.
+keeps that node's TCP connection open for 3 seconds after each channel send.
 This gives the node time to process each outgoing message before disconnecting.
-With multiple targets or channels, allow roughly 2 seconds per channel send,
+With multiple targets or channels, allow roughly 3 seconds per channel send,
 plus connection and metrics time, when setting an external command timeout.
-Dry runs also keep each node connection open for 2 seconds before closing it,
+Dry runs also keep each node connection open for 3 seconds before closing it,
 so the Meshtastic library's background connection activity can finish cleanly.
 
 The `Announcement sent` log entry means the local send call returned; it does
@@ -276,6 +280,7 @@ send_only_on_change: true
 ```
 
 The script compares the current mesh state against the previous execution.
+For multiple targets, state is tracked independently for each node and channel.
 
 Current tracked values:
 
@@ -284,6 +289,17 @@ Current tracked values:
 - BATTERY
 - TOP_NEIGHBOR
 - BEST_SNR
+- NODES_SEEN_1H
+- NODES_SEEN_24H
+- STALE_NODE_COUNT
+- LOW_BATTERY_COUNT
+- LAST_HEARD_NODE
+- LAST_HEARD_TIME
+- GPS_SATELLITES
+- GROUND_SPEED
+- TEMPERATURE
+- RELATIVE_HUMIDITY
+- BAROMETRIC_PRESSURE
 
 If no change is detected, no transmission occurs.
 
@@ -333,7 +349,7 @@ No code modifications are required.
 
 | Token | Description |
 |---------|-------------|
-| `{NODE_COUNT}` | Total nodes |
+| `{NODE_COUNT}` | Nodes in the connected radio's node database |
 | `{DIRECT_COUNT}` | Direct nodes |
 | `{ONE_HOP_COUNT}` | One-hop nodes |
 | `{TWO_HOP_COUNT}` | Two-hop nodes |
@@ -486,7 +502,6 @@ meshtastic-announcer/
 
 Planned enhancements:
 
-- Real node uptime reporting
 - LoRa region detection
 - MQTT status monitoring
 - Modem preset reporting
@@ -496,7 +511,6 @@ Planned enhancements:
 - Automatic weather integration (currently disabled)
 - Multiple template support
 - Direct-message announcement mode
-- Multi-node monitoring
 
 ---
 
