@@ -4,7 +4,7 @@
 Meshtastic Scheduled Announcer
 
 Features:
-- TCP connection
+- TCP and USB serial connections
 - YAML configuration
 - Template token replacement
 - State change detection
@@ -24,6 +24,7 @@ from pathlib import Path
 
 import yaml
 import meshtastic.mesh_interface
+import meshtastic.serial_interface
 import meshtastic.tcp_interface
 
 
@@ -71,6 +72,10 @@ def get_targets(config):
         return [
             {
                 "host": meshtastic_config["host"],
+                "target_id": meshtastic_config["host"],
+                "target_label": meshtastic_config["host"],
+                "connection_type": "tcp",
+                "connection_value": meshtastic_config["host"],
                 "channel_indices": [
                     meshtastic_config.get("channel_index", 0)
                 ],
@@ -86,7 +91,7 @@ def get_targets(config):
         )
 
     targets = []
-    seen_hosts = set()
+    seen_target_ids = set()
 
     for index, target in enumerate(configured_targets):
         if not isinstance(target, dict):
@@ -94,19 +99,37 @@ def get_targets(config):
                 f"meshtastic.targets[{index}] must be a mapping."
             )
 
+        has_host = "host" in target
+        has_serial_port = "serial_port" in target
+        if has_host == has_serial_port:
+            raise ValueError(
+                f"meshtastic.targets[{index}] must specify exactly one "
+                "of host or serial_port."
+            )
+
         host = target.get("host")
+        serial_port = target.get("serial_port")
+        connection_type = "tcp" if has_host else "serial"
+        connection_value = host if has_host else serial_port
+        connection_field = "host" if has_host else "serial_port"
+        if (
+            not isinstance(connection_value, str)
+            or not connection_value.strip()
+        ):
+            raise ValueError(
+                f"meshtastic.targets[{index}].{connection_field} "
+                "must be a non-empty string."
+            )
+
+        target_id = host if has_host else f"serial:{serial_port}"
+        if target_id in seen_target_ids:
+            raise ValueError(
+                f"Duplicate target configured: {target_id}"
+            )
+        seen_target_ids.add(target_id)
+        target_label = host if has_host else target_id
+
         channel_indices = target.get("channel_indices")
-
-        if not isinstance(host, str) or not host.strip():
-            raise ValueError(
-                f"meshtastic.targets[{index}].host must be a non-empty string."
-            )
-
-        if host in seen_hosts:
-            raise ValueError(
-                f"Duplicate target host configured: {host}"
-            )
-        seen_hosts.add(host)
 
         if not isinstance(channel_indices, list) or not channel_indices:
             raise ValueError(
@@ -121,13 +144,14 @@ def get_targets(config):
                 or channel_index < 0
             ):
                 raise ValueError(
-                    f"Invalid channel index for target {host}: "
+                    f"Invalid channel index for target {target_label}: "
                     f"{channel_index!r}"
                 )
 
         if len(set(channel_indices)) != len(channel_indices):
             raise ValueError(
-                f"Duplicate channel index configured for target {host}."
+                f"Duplicate channel index configured for target "
+                f"{target_label}."
             )
 
         request_environment = target.get(
@@ -143,12 +167,33 @@ def get_targets(config):
         targets.append(
             {
                 "host": host,
+                "target_id": target_id,
+                "target_label": target_label,
+                "connection_type": connection_type,
+                "connection_value": connection_value,
                 "channel_indices": channel_indices,
                 "request_environment_metrics": request_environment
             }
         )
 
     return targets, True
+
+
+def create_interface(target):
+    if target["connection_type"] == "serial":
+        return meshtastic.serial_interface.SerialInterface(
+            devPath=target["connection_value"]
+        )
+
+    if target["connection_type"] == "tcp":
+        return meshtastic.tcp_interface.TCPInterface(
+            target["connection_value"]
+        )
+
+    raise ValueError(
+        f"Unsupported target connection type: "
+        f"{target['connection_type']!r}"
+    )
 
 
 def setup_logging(config):
@@ -934,16 +979,14 @@ def main():
         return 1
 
     for target in targets:
-        host = target["host"]
+        target_id = target["target_id"]
+        target_label = target["target_label"]
         channel_indices = target["channel_indices"]
         interface = None
 
         try:
-            logging.info("Connecting to %s", host)
-            interface = (
-                meshtastic.tcp_interface
-                .TCPInterface(host)
-            )
+            logging.info("Connecting to %s", target_label)
+            interface = create_interface(target)
 
             if (
                 target["request_environment_metrics"]
@@ -957,11 +1000,11 @@ def main():
             tokens = get_metrics(interface, config)
             current_state = state_snapshot(tokens)
             if multiple_targets:
-                host_states = target_states.get(host, {})
-                if not isinstance(host_states, dict):
-                    host_states = {}
+                target_channel_states = target_states.get(target_id, {})
+                if not isinstance(target_channel_states, dict):
+                    target_channel_states = {}
             else:
-                host_states = {}
+                target_channel_states = {}
 
             if args.dry_run:
                 if multiple_targets or (
@@ -975,14 +1018,14 @@ def main():
                             channel_tokens(tokens, channel_index)
                         )
                         print_dry_run(
-                            host,
+                            target_label,
                             [channel_index],
                             message
                         )
                 else:
                     logging.info(
                         "No change detected for %s.",
-                        host
+                        target_label
                     )
                 time.sleep(3)
                 continue
@@ -996,7 +1039,7 @@ def main():
                 )
 
                 if multiple_targets:
-                    channel_state = host_states.get(
+                    channel_state = target_channel_states.get(
                         str(channel_index),
                         {}
                     )
@@ -1012,7 +1055,7 @@ def main():
                 ):
                     logging.info(
                         "No change detected for %s channel %s.",
-                        host,
+                        target_label,
                         channel_index
                     )
                     continue
@@ -1026,8 +1069,8 @@ def main():
                 sent_any = True
 
                 if multiple_targets:
-                    host_states[str(channel_index)] = current_state
-                    target_states[host] = host_states
+                    target_channel_states[str(channel_index)] = current_state
+                    target_states[target_id] = target_channel_states
                     save_state(
                         config["state_file"],
                         {"targets": target_states}
@@ -1040,20 +1083,20 @@ def main():
 
                 logging.info(
                     "Announcement submitted to %s channel %s.",
-                    host,
+                    target_label,
                     channel_index
                 )
 
             if sent_any:
                 logging.info(
                     "Announcement sent to %s.",
-                    host
+                    target_label
                 )
 
         except Exception:
             logging.exception(
                 "Failed to process target %s",
-                host
+                target_label
             )
             exit_code = 1
 
@@ -1064,7 +1107,7 @@ def main():
                 except Exception:
                     logging.exception(
                         "Failed to close Meshtastic interface for %s",
-                        host
+                        target_label
                     )
                     exit_code = 1
 

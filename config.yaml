@@ -1,0 +1,45 @@
+# Temperature, speed, and altitude tags use this unit system.
+# Metric: °C, km/h, m. Imperial: °F, mph, ft. Pressure remains in hPa.
+units: imperial
+
+meshtastic:
+  targets:
+    - host: 192.168.50.46 # (🥋 Morpheus)
+      channel_indices: [3]
+      request_environment_metrics: true
+#    - host: 192.168.50.47 # (🛳  Niobi)
+#      channel_indices: [3]
+#      request_environment_metrics: false
+    - host: 192.168.50.48 # (🥷 Trinity)
+      channel_indices: [3]
+      request_environment_metrics: true
+    - host: 192.168.50.49 # (🪰 Nebuchadnezzar)
+      channel_indices: [3]
+      request_environment_metrics: false
+# Optional USB-connected target; use its actual serial device path.
+     - serial_port: /dev/ttyACM0 # (🛳  Niobi USB)
+       channel_indices: [3]
+       request_environment_metrics: false
+
+announce:
+  enabled: true
+  send_only_on_change: false
+
+  template: |
+    🟢 {NODE_COUNT} active
+    0️⃣ {DIRECT_COUNT} 1️⃣ {ONE_HOP_COUNT} 2️⃣ {TWO_HOP_COUNT} 3️⃣ {THREE_PLUS_HOP_COUNT}
+    📈 {CHANNEL_UTIL}% 📤 {AIRTX}% 📶 {AVERAGE_SNR}dB
+    🌡️ {TEMPERATURE}°F 🗜️ {BAROMETRIC_PRESSURE}hPa
+    🔋 {BATTERY}%
+    📟 {HW_MODEL}
+    📍 E.Tampa,FL
+    🏆 {TOP_NEIGHBOR} {BEST_SNR}dB 🕒 {LAST_HEARD_NODE} {LAST_HEARD_AGE}
+    ⌚ {UPTIME}
+
+logging:
+  file: /scripts/logs/meshtastic-announcer.log
+
+state_file: /scripts/autoannounce/state.json
+
+weather:
+  enabled: false

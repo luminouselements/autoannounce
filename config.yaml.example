@@ -11,6 +11,9 @@ meshtastic:
       channel_indices: [0, 1]
     - host: 192.168.1.12
       channel_indices: [0, 1]
+    # Optional USB-connected target; use its actual serial device path.
+    - serial_port: /dev/ttyACM0
+      channel_indices: [3]
 
 announce:
   enabled: true # Set to false to disable announcements

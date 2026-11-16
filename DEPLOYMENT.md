@@ -31,7 +31,8 @@ service account and administrators.
 
 Make sure the service account can read the application and configuration and
 write to the configured log and state locations. Do not run the script as root
-just to work around a permissions problem.
+just to work around a permissions problem. If using a USB serial target, also
+grant the service account access to that specific serial device.
 
 ## Check before scheduling
 

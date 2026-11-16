@@ -4,15 +4,17 @@
 
 The script may target one node with `meshtastic.host` and
 `meshtastic.channel_index`, or multiple nodes with a `meshtastic.targets` list.
-For multiple targets, each node supplies its own metrics and rendered message.
-Each target can send to multiple channel indices. Change detection is tracked
-per node and channel.
+Each target can use a TCP `host` or a USB `serial_port`. USB devices must be
+connected to the machine running the script, and the scheduled account must
+have permission to access the serial device. For multiple targets, each node
+supplies its own metrics and rendered message. Each target can send to multiple
+channel indices. Change detection is tracked per node and channel.
 
 Use a shared `flock` lock file for every scheduled job that must serialize
 access to the Meshtastic node. The lock only coordinates jobs that use that
 same lock path. Leave enough timeout for all node connections and channel
-sends; the script waits two seconds after each channel send and also holds each
-dry-run connection open for two seconds before closing.
+sends; the script waits three seconds after each channel send and also holds
+each dry-run connection open for three seconds before closing.
 
 ## Logs and state
 
@@ -22,7 +24,7 @@ configure log rotation for it at the operating-system level.
 
 `state.json` is written after a successful local send call and is used by
 `send_only_on_change`. For multiple targets, the state is stored separately by
-host and channel. Back it up only if preserving change-detection history is
+target and channel. Back it up only if preserving change-detection history is
 important. It can be removed to reset that history; the next run may send
 announcements again.
 
@@ -36,8 +38,10 @@ node.
    for the expected account, and the cron output log is writable.
 2. **Permission error:** Check ownership and write permissions for the
    configured application log, state-file parent directory, and cron log.
-3. **Connection error:** Confirm the target address is reachable from the
-   cron host and that the node's Meshtastic TCP service is enabled.
+3. **Connection error:** For TCP targets, confirm the address is reachable
+   from the cron host and the node's Meshtastic TCP service is enabled. For
+   serial targets, confirm the configured device path exists and the cron
+   account has permission to access it.
 4. **No message received:** Verify the sending node and receivers use the
    intended channel index and compatible channel settings. A local send log
    alone is not delivery confirmation.

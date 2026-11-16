@@ -2,13 +2,13 @@
 
 A lightweight Python-based Meshtastic automation script designed to run from Linux cron jobs and periodically announce node and mesh statistics to a Meshtastic channel.
 
-This project was inspired by MeshMonitor automation concepts but is intentionally designed as a standalone script using the native Meshtastic Python API and TCP connectivity.
+This project was inspired by MeshMonitor automation concepts but is intentionally designed as a standalone script using the native Meshtastic Python API with TCP and USB serial connectivity.
 
 ---
 
 ## Features
 
-- TCP connection to a Meshtastic node
+- TCP or USB serial connection to a Meshtastic node
 - Configurable message templates
 - Dynamic token replacement
 - Scheduled execution via cron
@@ -62,7 +62,7 @@ Updated: 2026-11-01 09:30:00
 
 - Linux
 - Python 3.10+
-- Meshtastic device reachable via TCP
+- Meshtastic device reachable via TCP or connected by USB serial
 
 ## Python Packages
 
@@ -167,10 +167,22 @@ meshtastic:
       channel_indices: [1]
 ```
 
-Each host must appear only once and each target must have at least one channel
-index. The state-change check is tracked independently for each node and
+Each target must appear only once and have at least one channel index. The
+state-change check is tracked independently for each node and
 channel. `--dry-run` displays the generated message for every target without
 sending or updating state.
+
+For a USB-connected node, use `serial_port` instead of `host`. For example:
+
+```yaml
+    - serial_port: /dev/ttyACM0
+      channel_indices: [0]
+```
+
+Each target must specify exactly one of `host` or `serial_port`. The serial
+device must be connected to the machine running the script, and the account
+running it must have permission to access that device. TCP targets keep their
+existing configuration format.
 
 Set `request_environment_metrics: true` for a target with an environmental
 sensor to request fresh telemetry when temperature or barometric pressure is
@@ -233,10 +245,10 @@ Send regardless of change detection.
 python3 announce.py --force
 ```
 
-## TCP Send Delay
+## Connection Hold After Sending
 
 After calling the Meshtastic Python API to send an announcement, the script
-keeps that node's TCP connection open for 3 seconds after each channel send.
+keeps that node's connection open for 3 seconds after each channel send.
 This gives the node time to process each outgoing message before disconnecting.
 With multiple targets or channels, allow roughly 3 seconds per channel send,
 plus connection and metrics time, when setting an external command timeout.
